@@ -1,4 +1,3 @@
-
 #include <cstddef>
 #include <cstdint>
 #include <elfio/elfio.hpp>
@@ -99,14 +98,29 @@ void processSubprogram(Dwarf_Debug dbg, Dwarf_Die die, Dwarf_Bool is_info) {
 
       if (tag == DW_TAG_formal_parameter) {
         Dwarf_Attribute name_attr;
+
         char *paramName = nullptr;
         bool nameFound = false;
+
+        Dwarf_Bool is_artificial = false;
+        Dwarf_Attribute artificial_attr;
+
+        if (dwarf_attr(child_die, DW_AT_artificial, &artificial_attr, &error) ==
+            DW_DLV_OK) {
+          dwarf_formflag(artificial_attr, &is_artificial, &error);
+        }
 
         if (dwarf_attr(child_die, DW_AT_name, &name_attr, &error) ==
             DW_DLV_OK) {
           if (dwarf_formstring(name_attr, &paramName, &error) == DW_DLV_OK) {
             nameFound = true;
-            params.push_back(paramName);
+            if (is_artificial) {
+              auto paramName1 = "/*" + std::string(paramName) + "*/";
+              params.push_back(paramName1);
+              dwarf_dealloc(dbg, artificial_attr, DW_DLA_ATTR);
+            } else {
+              params.push_back(paramName);
+            }
             dwarf_dealloc(dbg, paramName, DW_DLA_STRING);
           }
           dwarf_dealloc(dbg, name_attr, DW_DLA_ATTR);
@@ -126,12 +140,26 @@ void processSubprogram(Dwarf_Debug dbg, Dwarf_Die die, Dwarf_Bool is_info) {
                   getDieFromOffset(dbg, abstract_origin_offset, is_info);
               if (abstract_origin_die) {
                 Dwarf_Attribute name_attr;
+                Dwarf_Bool is_artificial = false;
+                Dwarf_Attribute artificial_attr;
+                if (dwarf_attr(abstract_origin_die, DW_AT_artificial,
+                               &artificial_attr, &error) == DW_DLV_OK) {
+
+                  dwarf_formflag(artificial_attr, &is_artificial, &error);
+                }
+
                 if (dwarf_attr(abstract_origin_die, DW_AT_name, &name_attr,
                                &error) == DW_DLV_OK) {
                   if (dwarf_formstring(name_attr, &paramName, &error) ==
                       DW_DLV_OK) {
+                    if (is_artificial) {
+                      auto paramName1 = "/*" + std::string(paramName) + "*/";
+                      params.push_back(paramName1);
+                      dwarf_dealloc(dbg, artificial_attr, DW_DLA_ATTR);
+                    } else {
+                      params.push_back(paramName);
+                    }
                     // std::cout << "name: " << paramName << std::endl;
-                    params.push_back(paramName);
                     dwarf_dealloc(dbg, paramName, DW_DLA_STRING);
                   }
                   dwarf_dealloc(dbg, name_attr, DW_DLA_ATTR);
@@ -214,6 +242,7 @@ void processDwarf(const char *elf_file) {
                       DW_GROUPNUMBER_ANY, errhand, errarg, &dbg,
                       &error) != DW_DLV_OK) {
     std::cerr << "Failed to initialize DWARF debug context." << std::endl;
+    std::cerr << "Error: " << dwarf_errmsg(error) << std::endl;
     return;
   }
 
@@ -241,6 +270,37 @@ void processDwarf(const char *elf_file) {
   dwarf_finish(dbg);
 }
 
+#include <string>
+
+std::string getElfTypeName(ELFIO::Elf_Word type) {
+  switch (type) {
+  case 0:
+    return "STT_NOTYPE";
+  case 1:
+    return "STT_OBJECT";
+  case 2:
+    return "STT_FUNC";
+  case 3:
+    return "STT_SECTION";
+  case 4:
+    return "STT_FILE";
+  case 5:
+    return "STT_COMMON";
+  case 6:
+    return "STT_TLS";
+  case 10:
+    return "STT_LOOS / STT_AMDGPU_HSA_KERNEL"; // 特殊情况，两个名称共享同一个值
+  case 12:
+    return "STT_HIOS";
+  case 13:
+    return "STT_LOPROC";
+  case 15:
+    return "STT_HIPROC";
+  default:
+    return "Unknown";
+  }
+}
+
 void processFunc(const char *elf_file) {
   ELFIO::elfio reader;
 
@@ -262,6 +322,9 @@ void processFunc(const char *elf_file) {
     unsigned char other;
 
     symbols.get_symbol(i, name, value, size, bind, type, section_index, other);
+
+    // std::cout << "name: " << name << ", value: " << std::hex << value
+    //           << ", type: " << getElfTypeName(type) << std::endl;
 
     if (type == ELFIO::STT_FUNC && value != 0) {
       funcMap[name] = value;
