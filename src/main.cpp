@@ -5,6 +5,7 @@
 #include <iostream>
 #include <libdwarf/dwarf.h>
 #include <libdwarf/libdwarf.h>
+#include <nlohmann/json.hpp>
 #include <stack>
 #include <string>
 #include <unordered_map>
@@ -27,50 +28,6 @@ Dwarf_Die getDieFromOffset(Dwarf_Debug dbg, Dwarf_Off offset,
     // std::cout << "result: " << result << std::endl;
     return nullptr;
   }
-}
-
-std::string getNameFromAbstractOrigin(Dwarf_Debug dbg, Dwarf_Die die) {
-  Dwarf_Error error;
-  Dwarf_Attribute abstract_origin_attr;
-  Dwarf_Off abstract_origin_offset;
-  Dwarf_Die abstract_origin_die;
-  char *name = nullptr;
-
-  if (dwarf_attr(die, DW_AT_abstract_origin, &abstract_origin_attr, &error) !=
-      DW_DLV_OK) {
-    return "";
-  }
-
-  if (dwarf_global_formref(abstract_origin_attr, &abstract_origin_offset,
-                           &error) != DW_DLV_OK) {
-    dwarf_dealloc(dbg, abstract_origin_attr, DW_DLA_ATTR);
-    return "";
-  }
-
-  if (dwarf_offdie_b(dbg, abstract_origin_offset, DW_DLV_OK,
-                     &abstract_origin_die, &error) != DW_DLV_OK) {
-    dwarf_dealloc(dbg, abstract_origin_attr, DW_DLA_ATTR);
-    return "";
-  }
-
-  Dwarf_Attribute name_attr;
-  if (dwarf_attr(abstract_origin_die, DW_AT_name, &name_attr, &error) ==
-      DW_DLV_OK) {
-    if (dwarf_formstring(name_attr, &name, &error) == DW_DLV_OK) {
-      // std::cout << "name: " << name << std::endl;
-      std::string result(name);
-      dwarf_dealloc(dbg, name, DW_DLA_STRING);
-      dwarf_dealloc(dbg, name_attr, DW_DLA_ATTR);
-      dwarf_dealloc(dbg, abstract_origin_die, DW_DLA_DIE);
-      dwarf_dealloc(dbg, abstract_origin_attr, DW_DLA_ATTR);
-      return result;
-    }
-    dwarf_dealloc(dbg, name_attr, DW_DLA_ATTR);
-  }
-
-  dwarf_dealloc(dbg, abstract_origin_die, DW_DLA_DIE);
-  dwarf_dealloc(dbg, abstract_origin_attr, DW_DLA_ATTR);
-  return "";
 }
 
 void processSubprogram(Dwarf_Debug dbg, Dwarf_Die die, Dwarf_Bool is_info) {
@@ -163,11 +120,15 @@ void processSubprogram(Dwarf_Debug dbg, Dwarf_Die die, Dwarf_Bool is_info) {
                     dwarf_dealloc(dbg, paramName, DW_DLA_STRING);
                   }
                   dwarf_dealloc(dbg, name_attr, DW_DLA_ATTR);
+                } else {
+                  params.push_back("");
                 }
                 dwarf_dealloc(dbg, abstract_origin_die, DW_DLA_DIE);
               }
             }
             dwarf_dealloc(dbg, abstract_origin_attr, DW_DLA_ATTR);
+          } else {
+            params.push_back("");
           }
         }
       }
@@ -345,30 +306,21 @@ int main(int argc, char **argv) {
   processFunc(elf_file);
   processDwarf(elf_file);
 
-  std::ofstream outfile(out_file);
-  if (!outfile.is_open()) {
-    std::cerr << "Failed to open output file " << out_file << std::endl;
-    return 1;
-  }
-
+  nlohmann::json j;
   for (auto &item : funcMap) {
     if (paramsMap.find(item.second) == paramsMap.end()) {
       continue;
     }
-    outfile << item.first << ": 0x" << std::hex << item.second << " : [";
     auto &params = paramsMap[item.second];
     if (!params.empty()) {
-      for (size_t i = 0; i < params.size(); ++i) {
-        outfile << params[i];
-        if (i < params.size() - 1) {
-          outfile << ", ";
-        }
-      }
+      j[item.first] = params;
     }
-    outfile << "]" << std::endl;
   }
 
-  outfile.close();
+  std::ofstream outfile(out_file);
 
+  outfile << j.dump(4) << std::endl;
+
+  outfile.close();
   return 0;
 }
